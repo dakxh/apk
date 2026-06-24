@@ -35,23 +35,46 @@ jobs:
       - name: Install apk-mitm globally
         run: npm install -g apk-mitm
 
-      - name: Download the APK
+      - name: Download the APK/Bundle
         run: |
-          echo "Downloading APK from provided URL..."
-          # Using -L to follow redirects, and saving it generically as target.apk
-          curl -L -o target.apk "${{ inputs.apk_url }}"
+          echo "Downloading app from provided URL..."
+          
+          # Extract the original filename from the URL to preserve .apk, .apks, or .xapk
+          # If no filename is detected in the URL, default to app.apk
+          FILENAME=$(basename "${{ inputs.apk_url }}" | cut -d? -f1)
+          if [[ ! "$FILENAME" =~ \.(apk|apks|xapk)$ ]]; then
+            FILENAME="app.apk"
+          fi
+          
+          echo "Saving file as: $FILENAME"
+          curl -L -o "$FILENAME" "${{ inputs.apk_url }}"
+          
+          # Quick sanity check to ensure we didn't download an HTML block page
+          FILE_TYPE=$(file -b "$FILENAME")
+          if [[ "$FILE_TYPE" == *"HTML"* ]]; then
+            echo "ERROR: The downloaded file is an HTML page, not an APK. Check your URL."
+            exit 1
+          fi
+          
+          # Pass the filename to the next step
+          echo "TARGET_FILE=$FILENAME" >> $GITHUB_ENV
 
-      - name: Patch the APK
+      - name: Patch the App
         run: |
-          echo "Running apk-mitm..."
-          apk-mitm target.apk
+          echo "Running apk-mitm on ${{ env.TARGET_FILE }}..."
+          apk-mitm "${{ env.TARGET_FILE }}"
           
-          # apk-mitm outputs the file as <original-name>-patched.apk
-          # We rename it to something standard before pushing
-          mv target-patched.apk patched_app.apk
+          # apk-mitm appends '-patched' to the original filename before the extension
+          # Extract the name and extension to find the output file dynamically
+          BASENAME="${TARGET_FILE%.*}"
+          EXT="${TARGET_FILE##*.}"
+          PATCHED_FILE="${BASENAME}-patched.${EXT}"
           
-          # Clean up the original so we don't accidentally commit it
-          rm target.apk
+          # Rename it to something standard for the git commit
+          mv "$PATCHED_FILE" patched_app."$EXT"
+          
+          # Clean up the original
+          rm "${{ env.TARGET_FILE }}"
 
       - name: Commit and Push modified APK to repo
         run: |
